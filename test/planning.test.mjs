@@ -12,7 +12,7 @@ const otherFixture=readFileSync(path.join(base,'dist/assets/b.png')).toString('b
 const reply=message=>({ok:true,json:async()=>({choices:[{message}],usage:{total_tokens:10}})});
 let nextPort=4400;
 
-async function scenario({count,requestedCount=count,failAt,continueRemaining=false,reserveFen,foreignRef=false,preSpendFen=0,imageDelays=[],text}){
+async function scenario({count,requestedCount=count,failAt,transportFailAt,continueRemaining=false,reserveFen,foreignRef=false,preSpendFen=0,imageDelays=[],text}){
  const dir=mkdtempSync(path.join(os.tmpdir(),'forma-plan-'));
  if(preSpendFen)writeFileSync(path.join(dir,'budget.json'),JSON.stringify([{id:'old',jobId:'old',fen:preSpendFen,status:'estimated'}]));
  let imageCalls=0,imageInFlight=0,maxImageInFlight=0,foreignId=null;const requests=[];
@@ -28,11 +28,12 @@ async function scenario({count,requestedCount=count,failAt,continueRemaining=fal
   imageCalls++;const callNumber=imageCalls;imageInFlight++;maxImageInFlight=Math.max(maxImageInFlight,imageInFlight);
   if(imageDelays[callNumber-1])await new Promise(resolve=>setTimeout(resolve,imageDelays[callNumber-1]));
   imageInFlight--;
+  if(callNumber===transportFailAt)throw new TypeError('fetch failed',{cause:Object.assign(new Error('other side closed'),{code:'UND_ERR_SOCKET'})});
   if(callNumber===failAt)return {ok:false,status:500,json:async()=>({error:{message:'mock image failure'}})};
   return {ok:true,json:async()=>({data:[{b64_json:fixture}]})};
  };
  const port=nextPort++;
- const server=createApp({base,dataDir:dir,port,env:{ZHIPU_API_KEY:'mock-secret',ARK_API_KEY:'mock-secret',ARK_IMAGE_RESERVE_FEN:reserveFen},fetcher});
+ const server=createApp({base,dataDir:dir,port,env:{ZHIPU_API_KEY:'mock-secret',ARK_API_KEY:'mock-secret',ARK_IMAGE_RESERVE_FEN:reserveFen,FORMA_DEBUG_TRACE:transportFailAt?'1':'0'},fetcher});
  await new Promise(resolve=>server.listen(port,'127.0.0.1',resolve));
  const origin=`http://127.0.0.1:${server.address().port}`;
  const api=async(route,payload)=>{const response=await fetch(origin+'/api/'+route,payload?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}:{});return {status:response.status,data:await response.json()}};
@@ -45,7 +46,8 @@ async function scenario({count,requestedCount=count,failAt,continueRemaining=fal
   let state;
   for(let i=0;i<100;i++){state=(await api('state')).data;if(state.project.jobs.at(-1)?.status!=='running')break;await new Promise(resolve=>setTimeout(resolve,10))}
   if(continueRemaining){const firstJob=state.project.jobs.at(-1);await api('continue-plan',{jobId:firstJob.id,requestId:'resume'});for(let i=0;i<100;i++){state=(await api('state')).data;if(state.project.jobs.at(-1)?.status!=='running')break;await new Promise(resolve=>setTimeout(resolve,10))}}
-  return {state,imageCalls,maxImageInFlight,requests,id};
+  const trace=transportFailAt?JSON.parse(readFileSync(path.join(dir,'debug-traces',state.project.jobs.at(-1).id+'.json'))):null;
+  return {state,imageCalls,maxImageInFlight,requests,id,trace};
  }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));rmSync(dir,{recursive:true,force:true})}
 }
 
@@ -86,6 +88,16 @@ test('要求下一张参考上一张结果时仍逐张执行',async()=>{
  const {state,maxImageInFlight}=await scenario({count:3,text:'请制作 3 张电商图片，后一张要参考上一张的生成结果',imageDelays:[20,20,20]});
  assert.equal(state.project.jobs.at(-1).status,'completed');
  assert.equal(maxImageInFlight,1);
+});
+
+test('生图连接断开时记录底层错误码，已在途的另一张仍可保存',async()=>{
+ const {state,trace}=await scenario({count:2,transportFailAt:1,imageDelays:[5,20]});
+ assert.equal(state.project.jobs.at(-1).status,'partial');
+ assert.equal(state.project.assets.length,1);
+ const failure=trace.events.find(event=>event.stage==='seedream_transport_failure');
+ assert.equal(failure.details[0].message,'fetch failed');
+ assert.equal(failure.details[1].code,'UND_ERR_SOCKET');
+ assert.ok(failure.elapsedMs>=0);
 });
 
 test('用户主动继续剩余图片时，计划升版，已完成作品保留',async()=>{

@@ -10,6 +10,15 @@ import {permitsPaidImage,permitsEffect,requireEffect} from './routing.mjs';
 const obj=(properties,required=Object.keys(properties))=>({type:'object',properties:Object.fromEntries(Object.entries(properties).map(([key,value])=>[key,structuredClone(value)])),additionalProperties:false,required});
 const str={type:'string'};
 const tool=(name,description,parameters)=>({type:'function',function:{name,description,parameters}});
+function transportFailureDetails(error,secrets=[]){
+ const safe=value=>secrets.filter(Boolean).reduce((text,secret)=>text.replaceAll(secret,'[已隐藏]'),String(value||'')).slice(0,240);
+ const details=[];
+ for(let cause=error;cause&&details.length<4;cause=cause.cause){
+  details.push({name:safe(cause.name||'Error'),message:safe(cause.message),code:typeof cause.code==='string'?safe(cause.code):null,errno:typeof cause.errno==='number'?cause.errno:null,syscall:typeof cause.syscall==='string'?safe(cause.syscall):null});
+  if(cause.cause===cause)break;
+ }
+ return details;
+}
 const imageTextFields={text_mode:{type:'string',enum:['none','model_render']},text_content:{type:'array',items:obj({role:str,text:str,layout:str}),maxItems:8},aspect_ratio:{type:'string',enum:['auto','1:1','4:3','3:4','16:9','9:16','3:2','2:3']}};
 const imageRequired=['prompt','reference_ids','text_mode'];
 export function validateImageTextArgs(args){
@@ -199,7 +208,9 @@ export async function runAgent({project,job,contextSnapshot=null,env,budget,data
      trace('seedream_request',{planItemId:job.planItem?.id||null,tool:name,model:IMAGE_MODEL,prompt:args.prompt,textMode:textIntent.mode,textContent:textIntent.content,aspectRatio:finalSize?.ratio||'auto',size:imageSize,responseFormat:'b64_json',stream:false,watermark:false,referenceIds:validReferenceIds,referenceImageCount:inputRefs.length,targetAssetId:target?.id||null,reserveFen:priceFen});
      try{
       const payload={model:IMAGE_MODEL,prompt:args.prompt,size:imageSize,response_format:'b64_json',stream:false,watermark:false};if(inputRefs.length)payload.image=inputRefs;
-      const resp=await fetcher('https://ark.cn-beijing.volces.com/api/v3/images/generations',{method:'POST',headers:{Authorization:`Bearer ${env.ARK_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify(payload),signal:requestSignal(180000)});
+      let resp;const requestStartedAt=Date.now();
+      try{resp=await fetcher('https://ark.cn-beijing.volces.com/api/v3/images/generations',{method:'POST',headers:{Authorization:`Bearer ${env.ARK_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify(payload),signal:requestSignal(180000)})}
+      catch(error){trace('seedream_transport_failure',{planItemId:job.planItem?.id||null,elapsedMs:Date.now()-requestStartedAt,details:transportFailureDetails(error,[env.ARK_API_KEY,env.ZHIPU_API_KEY])});throw error}
       check();
       if(!resp.ok){const detail=await resp.json().catch(()=>({}));trace('seedream_result',{planItemId:job.planItem?.id||null,status:resp.status,ok:false,error:detail.error||null});const raw=String(detail.error?.message||detail.error?.code||'');const reason=raw.includes('Safe Experience Mode')?'当前模型被火山「安心体验」用量上限暂停。请先检查该模型的免费额度；应用不会替你关闭费用保护。':raw.replaceAll(env.ARK_API_KEY,'[已隐藏]').slice(0,400);budget.finish(reservation,'uncertain');throw Error(`生图服务返回 HTTP ${resp.status}：${reason}。为保守控费，预留金额暂不退回；请核对供应商账单，不自动重试。`)}
       const data=await resp.json(),img=data.data?.[0];if(!img?.b64_json)throw Error('生图未返回图片数据，费用状态待核对。');
