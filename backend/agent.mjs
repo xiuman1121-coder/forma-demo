@@ -104,8 +104,8 @@ export async function runAgent({project,job,contextSnapshot=null,env,budget,data
   check();
   emit('planning',step?'根据工具结果继续处理':'理解需求与所选素材');
   const model='glm-5.3-flash';
-  trace('agent_request',{planItemId:job.planItem?.id||null,step,model,messages,availableTools:availableTools.map(t=>t.function.name),toolChoice:'auto',maxTokens:8192});
-  const request=()=>fetcher('https://open.bigmodel.cn/api/paas/v4/chat/completions',{method:'POST',headers:{Authorization:`Bearer ${env.ZHIPU_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({model,messages,tools:availableTools,tool_choice:'auto',max_tokens:8192,thinking:{type:'enabled',clear_thinking:false},stream:false}),signal:requestSignal(180000)});
+  trace('agent_request',{planItemId:job.planItem?.id||null,step,model,messages,availableTools:availableTools.map(t=>t.function.name),toolChoice:'auto',maxTokens:8192,reasoningEffort:'low'});
+  const request=()=>fetcher('https://open.bigmodel.cn/api/paas/v4/chat/completions',{method:'POST',headers:{Authorization:`Bearer ${env.ZHIPU_API_KEY}`,'Content-Type':'application/json'},body:JSON.stringify({model,messages,tools:availableTools,tool_choice:'auto',max_tokens:8192,reasoning_effort:'low',thinking:{type:'enabled',clear_thinking:false},stream:false}),signal:requestSignal(180000)});
   const reservation=budget.reserve(job.id,5,job.taskLimitFen??Infinity);
   let response;
   try{response=await request();check();budget.finish(reservation,response.ok?'estimated':'uncertain')}

@@ -38,7 +38,7 @@ test('同一 Context 快照同时进入 Planning 与 Agent，上一轮分析通�
   };
   const text=await runTask({project,job,env:{ZHIPU_API_KEY:'mock'},budget:new Budget(path.join(dir,'budget.json'),1000),dataDir:dir,fetcher,emit:()=>{},persist:()=>{},trace:(stage,payload)=>traces.push({stage,...payload})});
   assert.match(text,/斜向构图/);assert.equal(calls.length,2);assert.equal(project.creativeTasks.length,0);
-  assert.equal(calls[0].reasoning_effort,'low');assert.equal(calls[1].reasoning_effort,undefined);
+  assert.equal(calls[0].reasoning_effort,'low');assert.equal(calls[1].reasoning_effort,'low');
   assert.equal(traces.find(event=>event.stage==='planning_input').parameters.reasoning_effort,'low');
   const planning=JSON.stringify(calls[0].messages),agent=JSON.stringify(calls[1].messages);
   assert.match(planning,/earlier/);assert.match(agent,/earlier/);assert.match(planning,/香水瓶位于左下/);assert.match(agent,/香水瓶位于左下/);
