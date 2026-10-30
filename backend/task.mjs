@@ -11,6 +11,7 @@ import {createPendingAction,resolvePendingAction,validatePendingAction,transitio
 
 export const TASK_IMAGE_LIMIT=4;
 export const TASK_BUDGET_FEN=80;
+const IMAGE_CONCURRENCY=2;
 const trim=(value,max=160)=>String(value||'').trim().slice(0,max);
 function tracePlanValidation(trace,message,job,plan,retry=false){
  try{
@@ -117,7 +118,7 @@ export function validateImageExecutionContext(project,child,item,dataDir){
 export function revisePlan(previous,changes=[],revisionOf=null){
  if(!previous||!Array.isArray(previous.items))throw Error('没有可修订的计划');
  const updates=new Map(changes.map(change=>[change.id,change]));
- return {version:(previous.version||1)+1,revisionOf,createdAt:new Date().toISOString(),mode:previous.mode,sourceId:previous.sourceId,styleAnalysis:previous.styleAnalysis||null,items:previous.items.map(item=>{
+ return {version:(previous.version||1)+1,revisionOf,batchId:previous.batchId||revisionOf,createdAt:new Date().toISOString(),mode:previous.mode,sourceId:previous.sourceId,styleAnalysis:previous.styleAnalysis||null,items:previous.items.map(item=>{
   if(item.status==='completed')return structuredClone(item);
   const change=updates.get(item.id)||{};
   return {...item,purpose:trim(change.purpose??item.purpose,100),sellingPoint:trim(change.sellingPoint??item.sellingPoint,200),visualDirection:trim(change.visualDirection??item.visualDirection,300),referenceIds:Array.isArray(change.referenceIds)?change.referenceIds.slice(0,3):item.referenceIds,status:'pending',error:null,startedAt:null};
@@ -287,17 +288,20 @@ export async function runTask({project,job,env,budget,dataDir,emit,persist,fetch
  if(creativeTask&&plan.items.length){requireEffect(decision,'save_draft');const approval=approvalForRevision(decision,job.text,creativeTask);trace('task_approval_check',{taskId:creativeTask.id,...approval,modelFlag:decision.confirmPreviousPlan||false});if(approval.approved){const confirmation=authorizeTaskDecision(decision,{confirmedApproval:true});requireEffect(confirmation,'confirm_revision');confirmTaskRevision(creativeTask,approval.revisionId);const confirmed=creativeTask.revisions.find(item=>item.id===approval.revisionId);trace('task_revision_confirmed',{taskId:creativeTask.id,revisionId:confirmed.id,version:confirmed.version,source:'verified_user_quote'})}const revision=recordTaskRevision(creativeTask,{job,text:plan.items.map(item=>`${item.order}. ${item.purpose}：${item.visualDirection}`).join('\n'),kind:'execution_plan',plan});trace('task_revision',{taskId:creativeTask.id,revisionId:revision.id,version:revision.version,status:revision.status,kind:revision.kind});persist()}
  if(!plan.items.length){job.textDeliverable=decision.stage!=='clarify'&&decision.stage==='plan';job.clarificationQuestion=decision.stage==='clarify'?decision.blockingQuestion:null;trace('text_delivery_contract',{stage:decision.stage,required:job.textDeliverable,clarificationQuestion:job.clarificationQuestion});const answer=await runAgent({project,job,contextSnapshot,env,budget,dataDir,emit,persist,fetcher,signal,audit,trace});if(plan.mode==='crop_grid'){job.delivery=deliveryStatus(job);if(!job.delivery.delivered)throw Error('模型未调用 crop_image，图片未裁切。');job.technicalStatus='completed';if(creativeTask)syncTaskDelivery(creativeTask,job);persist();return `已将原图等分裁成 ${job.delivery.delivered} 张独立图片并保存到画布。未调用生图模型。`}if(decision.operation==='draft'){requireEffect(decision,'save_draft');check();creativeTask=createCreativeTask(project,job);trace('task_created',{taskId:creativeTask.id,sourceIds:creativeTask.sourceIds});const materialBinding=applyTaskMaterialRoles(project,creativeTask,job.selection,decision.materialRoles);trace('task_material_roles',{taskId:creativeTask.id,...materialBinding});creativeTask.constraints=[trim(job.text,3000)];job.taskContext=taskSnapshot(creativeTask)}if(creativeTask&&permitsEffect(decision,'save_draft')){requireEffect(decision,'save_draft');const revision=recordTaskRevision(creativeTask,{job,text:answer,kind:decision.stage==='plan'?'design':'analysis'});if(job.pendingActionProposal){const pending=createPendingAction(project,creativeTask,job,revision,job.pendingActionProposal);job.pendingActionId=pending.id;trace('pending_action_created',{id:pending.id,taskId:creativeTask.id,targetAssetId:pending.target_asset_id,sourceRevisionId:revision.id})}job.taskContext=taskSnapshot(creativeTask);trace('task_revision',{taskId:creativeTask.id,revisionId:revision.id,version:revision.version,status:revision.status,kind:revision.kind});persist()}return answer}
  let note='';let attempts=0;
- for(const item of plan.items){
-  check();
-  if(item.status==='completed')continue;
-  if(attempts>=TASK_IMAGE_LIMIT){note='本轮已达到最多 4 张图片的执行上限。';break}
-  const reserveFen=imageReserveFen(env);
-  if((budget.entries||[]).filter(e=>e.jobId===job.id&&e.status!=='released').reduce((sum,e)=>sum+e.fen,0)+reserveFen>TASK_BUDGET_FEN||budget.snapshot().remainingFen<reserveFen){note='本轮或总预算不足，剩余计划已保留。';break}
-  attempts++;item.status='running';item.startedAt=new Date().toISOString();audit('plan_item_running',{planItemId:item.id,targetAssetId:item.targetAssetId,referenceIds:item.referenceIds});persist();emit('plan_item',`正在制作 ${item.order}/${plan.items.length}：${item.purpose}`,{itemId:item.id,status:'running'});
+ plan.batchId ||= job.id;
+ const canvasStart=project.assets.length;
+ for(const [index,item] of plan.items.entries())item.canvasSlot ??=canvasStart+index;
+ const dependsOnPriorImage=/(上一张|前一张|前一幅|前一版|上一幅|刚生成的图|先生成.{0,8}再)/;
+ const independent=plan.mode==='generate'&&!dependsOnPriorImage.test(job.text)&&plan.items.every(item=>!item.targetAssetId&&!dependsOnPriorImage.test([item.purpose,item.sellingPoint,item.visualDirection,item.newComposition,item.newScene,item.newCamera].join(' '))&&item.referenceIds.every(id=>project.uploads.some(upload=>upload.id===id)||project.assets.some(asset=>asset.id===id)));
+ const concurrency=independent?IMAGE_CONCURRENCY:1;
+ trace('execution_schedule',{concurrency,independent,planned:plan.items.length});
+ const imageReserved=new Set();
+ const runItem=async item=>{
+  check();item.status='running';item.startedAt=new Date().toISOString();audit('plan_item_running',{planItemId:item.id,targetAssetId:item.targetAssetId,referenceIds:item.referenceIds});persist();emit('plan_item',`正在制作 ${item.order}/${plan.items.length}：${item.purpose}`,{itemId:item.id,status:'running'});
   const style=plan.styleAnalysis?`\n风格分析（只迁移抽象特征）：${JSON.stringify(plan.styleAnalysis)}`:'';
-  const child={...job,originalText:item.aspectRatio?`最终画幅 ${item.aspectRatio}`:job.text,text:`用户原始需求：${job.text}\n本张作品用途：${item.purpose}\n核心卖点：${item.sellingPoint||'按真实产品信息呈现'}\n视觉方向：${item.visualDirection}${style}\n相对参考图必须变化的画面：${item.newComposition||'构图、机位和场景叙事应有明显变化，不复刻参考图'}\n${item.aspectRatio?`最终画幅比例：${item.aspectRatio}。` : ''}请只处理这一张图片，保留用户明确指定的画面和文字要求。`,selection:[...(item.targetAssetId?[item.targetAssetId]:[]),...(item.referenceIds.length?item.referenceIds:job.selection)],planItem:{id:item.id,purpose:item.purpose,sellingPoint:item.sellingPoint,visualDirection:item.visualDirection,newComposition:item.newComposition,newScene:item.newScene,newCamera:item.newCamera,styleAnalysis:plan.styleAnalysis,styleExtension:styleExtension(job.text),targetAssetId:item.targetAssetId},taskLimitFen:TASK_BUDGET_FEN,usage:job.usage};
+  const child={...job,originalText:item.aspectRatio?`最终画幅 ${item.aspectRatio}`:job.text,text:`用户原始需求：${job.text}\n本张作品用途：${item.purpose}\n核心卖点：${item.sellingPoint||'按真实产品信息呈现'}\n视觉方向：${item.visualDirection}${style}\n相对参考图必须变化的画面：${item.newComposition||'构图、机位和场景叙事应有明显变化，不复刻参考图'}\n${item.aspectRatio?`最终画幅比例：${item.aspectRatio}。` : ''}请只处理这一张图片，保留用户明确指定的画面和文字要求。`,selection:[...(item.targetAssetId?[item.targetAssetId]:[]),...(item.referenceIds.length?item.referenceIds:job.selection)],planItem:{id:item.id,order:item.order,purpose:item.purpose,sellingPoint:item.sellingPoint,visualDirection:item.visualDirection,newComposition:item.newComposition,newScene:item.newScene,newCamera:item.newCamera,styleAnalysis:plan.styleAnalysis,styleExtension:styleExtension(job.text),targetAssetId:item.targetAssetId},canvasSlot:item.canvasSlot,batchId:plan.batchId,taskLimitFen:TASK_BUDGET_FEN,usage:job.usage};
   if(job.executionRevision){child.taskContext={...job.taskContext,latestRevision:job.executionRevision,latestDesignRevision:job.executionRevision,designRevisions:[job.executionRevision],constraints:[],confirmedRevision:job.executionRevision.status==='confirmed'?job.executionRevision:null};}
-  const itemEmit=(type,text,detail={})=>emit(type,text,{...detail,planItemId:item.id});
+  const itemEmit=(type,text,detail={})=>{if(type==='generating')imageReserved.add(item.id);emit(type,text,{...detail,planItemId:item.id})};
   try{
    validateImageExecutionContext(project,child,item,dataDir);
    const boundSnapshot=buildContextSnapshot(project,child);
@@ -314,10 +318,30 @@ export async function runTask({project,job,env,budget,dataDir,emit,persist,fetch
    const validSaved=!!saved&&imageExists(dataDir,saved.versions.at(-1)?.image);
    if(validSaved){trace('file_check',{planItemId:item.id,assetId:saved.id,image:saved.versions.at(-1)?.image,result:'file_present_after_later_error',error:error.message});item.assetId=saved.id;item.status='completed';item.technicalCheck='file_present';item.quality='not_evaluated';item.warning=trim(error.message,300);emit('plan_item',`图片已保存，后续步骤中断：${item.purpose}`,{itemId:item.id,status:'completed',assetId:saved.id,warning:item.warning})}
    else{trace('file_check',{planItemId:item.id,assetId:saved?.id||null,image:saved?.versions.at(-1)?.image||null,result:'failed',error:error.message});if(saved&&!imageExists(dataDir,saved.versions.at(-1)?.image))project.assets.splice(project.assets.indexOf(saved),1);item.status='failed';item.error=trim(error.message,300);audit('plan_item_failed',{planItemId:item.id,error:item.error});emit('plan_item',`未完成：${item.purpose}`,{itemId:item.id,status:'failed',reason:item.error})}
-   note=`第 ${item.order} 张${validSaved?'已保存但后续步骤中断':'未完成'}：${trim(error.message,300)}`;persist();break;
+   persist();return {failed:true,note:`第 ${item.order} 张${validSaved?'已保存但后续步骤中断':'未完成'}：${trim(error.message,300)}`};
   }
-  job.delivery=deliveryStatus(job);persist();
+  job.delivery=deliveryStatus(job);persist();return {failed:false};
+ };
+ const pending=plan.items.filter(item=>item.status!=='completed');
+ const active=new Set();let next=0,stopped=false,abortError=null;
+ const taskUsed=()=>budget.entries.filter(entry=>entry.jobId===job.id&&entry.status!=='released').reduce((sum,entry)=>sum+entry.fen,0);
+ while(next<pending.length||active.size){
+  while(!stopped&&active.size<concurrency&&next<pending.length){
+   check();
+   if(attempts>=TASK_IMAGE_LIMIT){note='本轮已达到最多 4 张图片的执行上限。';stopped=true;break}
+   const required=5+imageReserveFen(env);
+   const capacity=required+imageReserveFen(env)*[...active].filter(running=>!imageReserved.has(running.itemId)).length;
+   if(taskUsed()+capacity>TASK_BUDGET_FEN||budget.snapshot().remainingFen<capacity){note='本轮或总预算不足，剩余计划已保留。';stopped=true;break}
+   const item=pending[next++];attempts++;
+   const running=runItem(item).then(result=>({running,item,result}),error=>({running,item,error}));running.itemId=item.id;
+   active.add(running);
+  }
+  if(!active.size)break;
+  const settled=await Promise.race(active);active.delete(settled.running);
+  if(settled.error){stopped=true;abortError||=settled.error}
+  else if(settled.result.failed){stopped=true;note=settled.result.note}
  }
+ if(abortError)throw abortError;
  job.delivery=deliveryStatus(job);job.technicalStatus=job.delivery.delivered===job.delivery.planned?'completed':job.delivery.delivered?'partial':attempts===0?'pending':'failed';persist();
  if(job.pendingActionId){const {action}=resolvePendingAction(project,job.pendingActionId);if(action){const resultAssetId=plan.items.find(item=>item.status==='completed')?.assetId||null;transitionPendingAction(action,resultAssetId?'completed':'failed',job.id,{resultAssetId,reason:resultAssetId?null:note||'image_not_delivered'});persist()}}
  if(creativeTask){syncTaskDelivery(creativeTask,job);trace('task_state',{taskId:creativeTask.id,status:creativeTask.status,delivered:creativeTask.delivered});persist()}

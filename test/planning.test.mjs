@@ -10,11 +10,12 @@ const base=path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const fixture=readFileSync(path.join(base,'dist/assets/a.png')).toString('base64');
 const otherFixture=readFileSync(path.join(base,'dist/assets/b.png')).toString('base64');
 const reply=message=>({ok:true,json:async()=>({choices:[{message}],usage:{total_tokens:10}})});
+let nextPort=4400;
 
-async function scenario({count,requestedCount=count,failAt,continueRemaining=false,reserveFen,foreignRef=false,preSpendFen=0}){
+async function scenario({count,requestedCount=count,failAt,continueRemaining=false,reserveFen,foreignRef=false,preSpendFen=0,imageDelays=[],text}){
  const dir=mkdtempSync(path.join(os.tmpdir(),'forma-plan-'));
  if(preSpendFen)writeFileSync(path.join(dir,'budget.json'),JSON.stringify([{id:'old',jobId:'old',fen:preSpendFen,status:'estimated'}]));
- let imageCalls=0,foreignId=null;const requests=[];
+ let imageCalls=0,imageInFlight=0,maxImageInFlight=0,foreignId=null;const requests=[];
  const fetcher=async(url,opt)=>{
   const body=JSON.parse(opt.body);requests.push({url,body});
   if(url.includes('bigmodel')){
@@ -24,11 +25,13 @@ async function scenario({count,requestedCount=count,failAt,continueRemaining=fal
    const context=JSON.parse(body.messages.findLast(m=>m.role==='user').content[0].text.split('\n用户需求：')[0]);
    return reply({tool_calls:[{id:'image',function:{name:'create_image',arguments:JSON.stringify({title:context.planItem.purpose,prompt:`设计 ${context.planItem.purpose}`,reference_ids:context.selection,text_mode:'none',text_content:[]})}}]});
   }
-  imageCalls++;
-  if(imageCalls===failAt)return {ok:false,status:500,json:async()=>({error:{message:'mock image failure'}})};
+  imageCalls++;const callNumber=imageCalls;imageInFlight++;maxImageInFlight=Math.max(maxImageInFlight,imageInFlight);
+  if(imageDelays[callNumber-1])await new Promise(resolve=>setTimeout(resolve,imageDelays[callNumber-1]));
+  imageInFlight--;
+  if(callNumber===failAt)return {ok:false,status:500,json:async()=>({error:{message:'mock image failure'}})};
   return {ok:true,json:async()=>({data:[{b64_json:fixture}]})};
  };
- const port=requestedCount!==count?4208:preSpendFen?4196:foreignRef?4195:reserveFen?4194:continueRemaining?4193:failAt?4192:4191;
+ const port=nextPort++;
  const server=createApp({base,dataDir:dir,port,env:{ZHIPU_API_KEY:'mock-secret',ARK_API_KEY:'mock-secret',ARK_IMAGE_RESERVE_FEN:reserveFen},fetcher});
  await new Promise(resolve=>server.listen(port,'127.0.0.1',resolve));
  const origin=`http://127.0.0.1:${server.address().port}`;
@@ -38,11 +41,11 @@ async function scenario({count,requestedCount=count,failAt,continueRemaining=fal
   const id=upload.uploadedId;
   const roleResult=await api('role',{id,role:'product'});assert.equal(roleResult.status,200,JSON.stringify(roleResult.data));assert.equal(roleResult.data.project.uploads[0].role,'product');
   if(foreignRef)foreignId=(await api('upload',{label:'不应使用的其他素材.png',data:'data:image/png;base64,'+otherFixture})).data.uploadedId;
-  await api('run',{text:`请制作 ${requestedCount} 张电商图片`,selection:[id],requestId:'suite'});
+  await api('run',{text:text||`请制作 ${requestedCount} 张电商图片`,selection:[id],requestId:'suite'});
   let state;
   for(let i=0;i<100;i++){state=(await api('state')).data;if(state.project.jobs.at(-1)?.status!=='running')break;await new Promise(resolve=>setTimeout(resolve,10))}
   if(continueRemaining){const firstJob=state.project.jobs.at(-1);await api('continue-plan',{jobId:firstJob.id,requestId:'resume'});for(let i=0;i<100;i++){state=(await api('state')).data;if(state.project.jobs.at(-1)?.status!=='running')break;await new Promise(resolve=>setTimeout(resolve,10))}}
-  return {state,imageCalls,requests,id};
+  return {state,imageCalls,maxImageInFlight,requests,id};
  }finally{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));rmSync(dir,{recursive:true,force:true})}
 }
 
@@ -65,11 +68,24 @@ test('多图交付完整规划五张，单轮只执行四张，剩余计划保�
  assert.equal(requests.filter(r=>r.url.includes('volces')).length,4);
 });
 
-test('第二张失败后保留第一张作品，后续计划不执行，也不自动重试',async()=>{
- const {state,imageCalls}=await scenario({count:3,failAt:2});const job=state.project.jobs.at(-1);
- assert.equal(job.status,'partial');assert.deepEqual(job.plan.items.map(i=>i.status),['completed','failed','pending']);
- assert.equal(job.delivery.delivered,1);assert.equal(state.project.assets.length,1);assert.equal(imageCalls,2);
+test('并发中的第二张失败后保留已在途的作品，不启动第四张或自动重试',async()=>{
+ const {state,imageCalls,maxImageInFlight}=await scenario({count:4,failAt:2,imageDelays:[5,25,40]});const job=state.project.jobs.at(-1);
+ assert.equal(job.status,'partial');assert.deepEqual(job.plan.items.map(i=>i.status),['completed','failed','completed','pending']);
+ assert.equal(job.delivery.delivered,2);assert.equal(state.project.assets.length,2);assert.equal(imageCalls,3);assert.equal(maxImageInFlight,2);
  assert.match(job.plan.items[1].error,/HTTP 500/);
+});
+
+test('两张并发生成，后完成的首图仍按计划顺序放到画布',async()=>{
+ const {state,imageCalls,maxImageInFlight}=await scenario({count:4,imageDelays:[35,5,10,5]});const job=state.project.jobs.at(-1);
+ assert.equal(job.status,'completed');assert.equal(imageCalls,4);assert.equal(maxImageInFlight,2);
+ assert.deepEqual(state.project.assets.map(asset=>asset.source.planOrder),[1,2,3,4]);
+ assert.deepEqual(state.project.assets.map(asset=>asset.x),[80,510,940,1370]);
+});
+
+test('要求下一张参考上一张结果时仍逐张执行',async()=>{
+ const {state,maxImageInFlight}=await scenario({count:3,text:'请制作 3 张电商图片，后一张要参考上一张的生成结果',imageDelays:[20,20,20]});
+ assert.equal(state.project.jobs.at(-1).status,'completed');
+ assert.equal(maxImageInFlight,1);
 });
 
 test('用户主动继续剩余图片时，计划升版，已完成作品保留',async()=>{
