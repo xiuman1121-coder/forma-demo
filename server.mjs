@@ -28,6 +28,8 @@ const lastConversationAt=project=>(project.jobs||[]).reduce((latest,job)=>Math.m
 const snapshot=()=>({project:Object.fromEntries(Object.entries(state).filter(([k])=>k!=='archived'&&k!=='trash')),projects:[state,...state.archived].filter(p=>p.messages?.length||p.uploads?.length||p.assets?.length).sort((a,b)=>lastConversationAt(b)-lastConversationAt(a)||a.id.localeCompare(b.id)).map(p=>({id:p.id,title:p.title||'未命名项目',cover:p.assets?.at(-1)?.versions.at(-1)?.image||p.uploads?.[0]?.url,createdAt:p.createdAt||p.jobs?.[0]?.startedAt||p.assets?.[0]?.versions?.[0]?.at||null})),budget:budget.snapshot(),configured:{brain:!!env.ZHIPU_API_KEY,image:!!env.ARK_API_KEY}});
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.png':'image/png','.jpg':'image/jpeg','.webp':'image/webp','.zip':'application/zip'};
 async function body(req){let data='';for await(const chunk of req){data+=chunk;if(data.length>32*1024*1024)throw Error('文件过大，图片请小于 8 MB')}let parsed;try{parsed=JSON.parse(data||'{}')}catch{throw Error('请求 JSON 格式无效')}if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw Error('请求 JSON 必须是对象');return parsed}
+async function rawBody(req,limit){const chunks=[];let length=0;for await(const chunk of req){length+=chunk.length;if(length>limit)throw Error('图片请小于 8 MB');chunks.push(chunk)}return Buffer.concat(chunks,length)}
+function validImage(bytes,type){return type==='image/png'?bytes.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):type==='image/jpeg'?bytes[0]===255&&bytes[1]===216:type==='image/webp'&&bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WEBP'}
 return http.createServer(async(req,res)=>{
  const json=(status,obj)=>{res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(obj))};
  try{
@@ -57,6 +59,25 @@ return http.createServer(async(req,res)=>{
    if(p==='/logout'&&req.method==='POST'){res.writeHead(303,{Location:'/login','Set-Cookie':auth.clear(secure),'Cache-Control':'no-store'});return res.end()}
   }
   if(p==='/api/state'&&req.method==='GET')return json(200,snapshot());
+  if(p==='/api/upload-image'&&req.method==='POST'){
+   if(req.headers['content-type']!=='application/octet-stream')return json(415,{error:'图片上传格式无效'});
+   if(state.jobs.some(j=>j.status==='running'))return json(409,{error:'任务执行中，请稍后添加图片'});
+   if(req.headers['x-forma-project-id']!==state.id)return json(409,{error:'项目已切换，请刷新后重试'});
+   const type=req.headers['x-forma-image-type'],previewLength=Number(req.headers['x-forma-preview-bytes']);
+   if(!['image/png','image/jpeg','image/webp'].includes(type)||!Number.isSafeInteger(previewLength)||previewLength<0||previewLength>1024*1024)return json(400,{error:'图片格式无效'});
+   const raw=await rawBody(req,9*1024*1024),bytes=raw.subarray(previewLength);
+   if(bytes.length<12||bytes.length>8*1024*1024||!validImage(bytes,type))return json(400,{error:'图片大小或格式无效'});
+   const preview=raw.subarray(0,previewLength);
+   if(previewLength&&!(preview[0]===255&&preview[1]===216))return json(400,{error:'预览图片格式无效'});
+   const hash=createHash('sha256').update(bytes).digest('hex'),existing=state.uploads.find(u=>u.hash===hash);
+   if(existing)return json(200,{...snapshot(),uploadedId:existing.id});
+   const label=decodeURIComponent(String(req.headers['x-forma-file-name']||'参考图')).slice(0,120);
+   const name=randomUUID()+'.'+({'image/png':'png','image/jpeg':'jpg','image/webp':'webp'}[type]);
+   writeFileSync(path.join(dataDir,'media',name),bytes,{mode:0o600});
+   const upload={id:randomUUID(),kind:'image',hash,label,role:'reference',url:'/media/'+name};
+   if(previewLength){const previewName=randomUUID()+'.jpg';writeFileSync(path.join(dataDir,'media',previewName),preview,{mode:0o600});upload.previewUrl='/media/'+previewName}
+   state.uploads.push(upload);persist();return json(200,{...snapshot(),uploadedId:upload.id});
+  }
   if(p.startsWith('/api/')&&req.method==='POST'){
    if(!req.headers['content-type']?.startsWith('application/json'))return json(415,{error:'需要 JSON'});
    const b=await body(req);if(b.projectId&&b.projectId!==state.id&&p!=='/api/open')return json(409,{error:'项目已切换，请刷新后重试'});const active=state.jobs.find(j=>j.status==='running');
