@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Forma Agent 流程图</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#fafcff;color:#163e64;font:15px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif}header{padding:25px 30px 10px;max-width:1600px;margin:auto}h1{font-size:28px;margin:0 0 5px}p{margin:0;color:#526b80}.legend{display:flex;gap:16px;flex-wrap:wrap;padding:10px 30px 18px;max-width:1600px;margin:auto;color:#60788d;font-size:13px}.legend b{font-weight:600}.wrap{overflow:auto;padding:0 18px 25px}svg{display:block;width:1500px;height:1420px;margin:auto;background:white;border:1px solid #e0e9f1;border-radius:16px;box-shadow:0 8px 30px #1b46750a}.line{fill:none;stroke:#91a3b2;stroke-width:1.7;marker-end:url(#a)}.panel{fill:#f8fbfd;stroke:#d8e3ec;stroke-dasharray:5 5;rx:16}.panel-title{fill:#718799;font-size:13px;font-weight:700}.node rect{rx:12;stroke-width:1.4}.node text{text-anchor:middle;fill:#164a73;font-size:15px;font-weight:700}.node .sub{font-size:12px;font-weight:400;fill:#526e82}.user rect{fill:#fff2df;stroke:#e3c394}.page rect{fill:#f2f0ff;stroke:#c4c2df}.backend rect{fill:#e9f5ff;stroke:#bbd4e8}.glm rect{fill:#eaf6ea;stroke:#b5d7ba}.seedream rect{fill:#fff0ec;stroke:#e8b7a9}.end rect{fill:#edf6ef;stroke:#b5d7ba}.branch{font-size:12px;fill:#6d8191;font-weight:700}.notes{max-width:1500px;margin:0 auto 35px;padding:0 18px;display:grid;grid-template-columns:repeat(2,1fr);gap:14px}.note{background:#fff;border:1px solid #dce7ef;border-radius:13px;padding:17px 20px}.note h2{font-size:17px;margin:0 0 7px}.note p{font-size:14px}.foot{max-width:1500px;margin:0 auto 30px;padding:0 18px;font-size:12px;color:#74899a}@media(max-width:750px){header{padding:17px}h1{font-size:23px}.legend{padding:8px 17px 15px}.notes{grid-template-columns:1fr}}
+</style></head><body>
+<header><h1>Forma：一条消息从用户到结果的流程</h1><p>按箭头从上往下看。每个框直接写明负责角色；左边是后端的特定处理，右边是一般 GLM 流程。</p></header>
+<div class="legend"><b>角色颜色：</b><span>🟨 用户</span><span>🟪 网页</span><span>🟦 Forma 后端</span><span>🟩 GLM</span><span>🟥 Seedream</span></div>
+<div class="wrap"><svg viewBox="0 0 1500 1420" role="img" aria-label="Forma Agent 角色和执行流程图">
+<defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#91a3b2"/></marker></defs>
+<path class="line" d="M750 92V122H360V155"/><path class="line" d="M750 92V122H1140V155"/>
+<path class="line" d="M360 212V252H750V282"/><path class="line" d="M1140 212V252H750V282"/>
+<path class="line" d="M750 340V374"/><path class="line" d="M750 430V467"/><path class="line" d="M750 527V560"/>
+<path class="line" d="M750 630V665H300V700"/><path class="line" d="M750 630V665H1200V700"/>
+<path class="line" d="M1200 764V805"/><path class="line" d="M1200 872V910"/>
+<path class="line" d="M1200 978V1020H275V1050"/><path class="line" d="M1200 978V1020H635V1050"/><path class="line" d="M1200 978V1020H1005V1050"/><path class="line" d="M1200 978V1050H1360"/>
+<path class="line" d="M1005 1112V1150"/><path class="line" d="M1005 1211V1247"/>
+<path class="line" d="M300 764V1335H750V1360"/><path class="line" d="M275 1112V1335H750V1360"/><path class="line" d="M635 1112V1335H750V1360"/><path class="line" d="M1005 1308V1335H750V1360"/><path class="line" d="M1360 1112V1335H750V1360"/>
+<rect class="panel" x="42" y="547" width="550" height="250"/><text class="panel-title" x="65" y="576">后端前置判断：固定代码条件，非大模型</text>
+<rect class="panel" x="899" y="547" width="550" height="460"/><text class="panel-title" x="920" y="576">一般路径：后端发送 Context → GLM 提出判断</text>
+<g class="node user"><rect x="610" y="35" width="280" height="57"/><text x="750" y="69">用户：开始或继续创作</text></g>
+<g class="node page"><rect x="250" y="155" width="220" height="57"/><text x="360" y="180">网页：新建项目</text><text class="sub" x="360" y="198">尚无这个项目的历史</text></g>
+<g class="node page"><rect x="1010" y="155" width="260" height="57"/><text x="1140" y="180">网页：打开已有项目</text><text class="sub" x="1140" y="198">载入已保存的对话与方案</text></g>
+<g class="node user"><rect x="500" y="282" width="500" height="58"/><text x="750" y="306">用户：发本轮文字、图片或选中作品</text><text class="sub" x="750" y="327">例如：“把上个方案改成海边，先不要生图”</text></g>
+<g class="node backend"><rect x="520" y="374" width="460" height="56"/><text x="750" y="399">后端：创建本轮 Job，记录这次请求</text><text class="sub" x="750" y="418">每轮新 Job；不是每轮新项目或新 Creative Task</text></g>
+<g class="node backend"><rect x="450" y="467" width="600" height="60"/><text x="750" y="492">后端：读取当前项目，准备本轮 Context</text><text class="sub" x="750" y="513">找相关任务、方案版本、约束、素材、确认状态</text></g>
+<g class="node backend"><rect x="515" y="560" width="470" height="70"/><text x="750" y="589">后端：先尝试特定前置判断</text><text class="sub" x="750" y="611">是否可直接处理？是否有明确“禁止生图”限制？</text></g>
+<text class="branch" x="425" y="653">命中特定情况</text><text class="branch" x="990" y="653">其余请求：交给 GLM 理解</text>
+<g class="node backend"><rect x="84" y="700" width="432" height="64"/><text x="300" y="726">后端：处理可确定的状态操作</text><text class="sub" x="300" y="747">如窄范围的方案直读；确认仍需核对依据</text></g>
+<g class="node backend"><rect x="955" y="700" width="490" height="64"/><text x="1200" y="726">后端 → Planning GLM：发送任务包</text><text class="sub" x="1200" y="747">System Prompt＋用户原话＋任务快照＋素材/图片</text></g>
+<g class="node glm"><rect x="957" y="805" width="486" height="67"/><text x="1200" y="832">Planning GLM → 后端：返回结构化建议</text><text class="sub" x="1200" y="852">查询/讨论/修改/确认/生图？关联哪件任务？</text></g>
+<g class="node backend"><rect x="952" y="910" width="496" height="68"/><text x="1200" y="937">后端：核对任务、版本和执行权限</text><text class="sub" x="1200" y="957">GLM 可建议，但不能自行授权写入或付费生图</text></g>
+<g class="node glm"><rect x="105" y="1050" width="340" height="62"/><text x="275" y="1075">查询／讨论／分析</text><text class="sub" x="275" y="1095">Agent GLM 结合 Context 当轮回答</text></g>
+<g class="node glm"><rect x="465" y="1050" width="340" height="62"/><text x="635" y="1075">制定／修改／确认方案</text><text class="sub" x="635" y="1095">GLM 写方案；后端保存或确认</text></g>
+<g class="node glm"><rect x="835" y="1050" width="340" height="62"/><text x="1005" y="1075">明确要求现在生图</text><text class="sub" x="1005" y="1095">Agent GLM 选择图像工具参数</text></g>
+<g class="node backend"><rect x="1200" y="1050" width="300" height="62"/><text x="1350" y="1075">对象不清 → 后端澄清</text><text class="sub" x="1350" y="1095">不猜测任务或作品</text></g>
+<g class="node backend"><rect x="835" y="1150" width="340" height="61"/><text x="1005" y="1176">后端：再次检查权限和预算</text><text class="sub" x="1005" y="1196">只执行真实获准的工具调用</text></g>
+<g class="node seedream"><rect x="835" y="1247" width="340" height="61"/><text x="1005" y="1273">Seedream：生成图片</text><text class="sub" x="1005" y="1293">后端检查文件、保存画布作品</text></g>
+<g class="node end"><rect x="570" y="1360" width="360" height="52"/><text x="750" y="1392">后端 → 网页 → 用户：交付本轮结果</text></g>
+</svg></div>
+<div class="notes"><div class="note"><h2>后端的规则会自动理解同义句吗？</h2><p>不会。规则是固定条件，未写到的表达可能漏判。当前特定前置处理包括：确认已有草案的候选判断、窄范围的已确认方案直读、明确禁止生图的限制、九宫格裁切和继续未完成计划。一般语义请求交给 Planning GLM。</p></div>
+<div class="note"><h2>后端会把什么发给 GLM？</h2><p>Planning GLM 收到规划 System Prompt、本轮用户话语、后端选出的相关任务与方案快照、约束、素材信息及可用图片。Agent GLM 另外收到执行 System Prompt、任务 Context、部分相关聊天历史和本轮可用工具。Seedream 收到的是最终生图 Prompt 与参考图片参数。</p></div>
+<div class="note"><h2>所有 Context 都由后端管理吗？</h2><p>Forma 后端保存用户消息、图片、方案版本、确认状态、素材和画布，并为每一次 GLM 调用选择输入。GLM 不会自行读取网页或项目数据库；它只知道本次请求带给它的内容，然后向后端返回文字或工具调用建议。</p></div>
+<div class="note"><h2>这次失败卡在哪里？</h2><p>后端已找到已确认 v2，但窄范围直读规则没认出“最后定下来的／不用做任何调整”，因此发给 Planning GLM。主模型 HTTP 429“访问量过大”；备用请求在发送前被 Forma 本地预算拦住。没有进入 Agent，也没有调用 Seedream。</p></div></div>
+<p class="foot">依据当前 Forma 代码与 Debug Trace job 2d8913ad-b3c5-4763-a8ed-be2a6f3b38cc。此图只说明现有流程，不修改业务代码或调用模型。</p>
+</body></html>

@@ -1,0 +1,13 @@
+{
+  "name": "forma-creative-agent",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "start": "node server.mjs",
+    "configure-login": "node scripts/configure-login.mjs",
+    "check": "node --check dist/app.js && node --check dist/providers.js && node --check dist/workspace.js && node --check dist/studio.js && node --check server.mjs && node --check backend/agent.mjs && node --check backend/task.mjs && node --check backend/task-context.mjs && node --check backend/context-snapshot.mjs && node --check backend/routing.mjs && node --check backend/planning-compare.mjs && node --check backend/proxy-fetch.mjs && node --check scripts/compare-planning.mjs && node --check backend/crop.mjs && node --check backend/pricing.mjs && node --check backend/zip.mjs && node --check dist/locale.js && node --check dist/zh-catalog.js && node --check dist/proposals.js",
+    "test": "node --test test/*.test.mjs"
+  }
+}
