@@ -183,7 +183,7 @@ return http.createServer(async(req,res)=>{
   let target;
   if(/^\/media\/[a-f0-9-]+\.(png|jpg|webp|zip)$/.test(p))target=path.join(dataDir,p.slice(1));
   else {target=path.resolve(root,'.'+p);if(!target.startsWith(root+path.sep)&&target!==root)return json(403,{error:'路径不允许'});if(p.split('/').some(s=>s.startsWith('.')))return json(403,{error:'路径不允许'});if(p==='/studio'||p==='/')target=path.join(root,'studio.html');else if(!path.extname(p))target=path.join(root,'index.html')}
-  const bytes=readFileSync(target);res.writeHead(200,{'Content-Type':types[path.extname(target)]||'application/octet-stream','X-Content-Type-Options':'nosniff','Cache-Control':'no-store',...(url.searchParams.has('download')?{'Content-Disposition':`attachment; filename=forma-design${path.extname(target)}`}:{})});res.end(bytes);
+  const bytes=readFileSync(target);const media=p.startsWith('/media/'),download=url.searchParams.has('download');res.writeHead(200,{'Content-Type':types[path.extname(target)]||'application/octet-stream','X-Content-Type-Options':'nosniff','Cache-Control':media&&!download?'private, max-age=86400, immutable':'no-store',...(download?{'Content-Disposition':`attachment; filename=forma-design${path.extname(target)}`}:{})});res.end(bytes);
  }catch(e){json(400,{error:e.code==='ENOENT'?'文件不存在':e.message})}
 });
 }
