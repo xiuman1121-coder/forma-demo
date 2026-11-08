@@ -18,6 +18,7 @@ test('固定账号保护项目、接口和图片，且原有预算记录保留',
  try{
   assert.equal((await fetch(base+'/studio',{headers,redirect:'manual'})).headers.get('location'),'/login');
   assert.equal((await fetch(base+'/api/state',{headers})).status,401);
+  assert.match(await (await fetch(base+'/login?expired=1',{headers})).text(),/登录已过期，请重新登录/);
   assert.equal((await fetch(base+'/media/00000000-0000-0000-0000-000000000000.png',{headers})).status,401);
   const form=new URLSearchParams({email:'owner@example.com',password:'correct horse battery staple'});
   const response=await fetch(base+'/login',{method:'POST',headers:{...headers,'Content-Type':'application/x-www-form-urlencoded'},body:form,redirect:'manual'});

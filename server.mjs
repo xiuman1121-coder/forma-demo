@@ -41,7 +41,7 @@ return http.createServer(async(req,res)=>{
   if(auth.enabled){
    if(p==='/login'&&req.method==='GET'){
     if(auth.verify(req)){res.writeHead(303,{Location:'/studio','Cache-Control':'no-store'});return res.end()}
-    res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});return res.end(loginPage());
+    res.writeHead(200,{'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});return res.end(loginPage(url.searchParams.has('expired')?'登录已过期，请重新登录':''));
    }
    if(p==='/login'&&req.method==='POST'){
     if(req.headers['content-type']?.split(';')[0]!=='application/x-www-form-urlencoded')return json(415,{error:'表单格式无效'});
